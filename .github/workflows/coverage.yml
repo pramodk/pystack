@@ -40,6 +40,7 @@ jobs:
           sudo apt-get install -qy \
             gdb \
             lcov \
+            gcc \
             cmake \
             ninja-build \
             libdw-dev \
@@ -53,6 +54,14 @@ jobs:
       - name: Disable ptrace security restrictions
         run: |
           echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+      - name: Require process-root native-symbol test support
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          sudo sysctl -w user.max_user_namespaces=15000 || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          unshare --user --map-root-user --mount --propagation private true
+          PYSTACK_REQUIRE_PROCESS_ROOT_TEST=1 \
+            python3 -m pytest -vvv -s tests/integration/test_native_process_root.py
       - name: Compute Python coverage
         run: |
           python3 -m pytest -vvv --log-cli-level=info -s --color=yes \
