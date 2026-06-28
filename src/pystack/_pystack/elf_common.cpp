@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <iomanip>
 #include <iostream>
+#include <sys/stat.h>
 #include <string>
 #include <utility>
 
@@ -13,6 +14,64 @@
 namespace pystack {
 
 using file_unique_ptr = std::unique_ptr<FILE, std::function<int(FILE*)>>;
+
+static int
+set_module_process_pid_userdata(
+        Dwfl_Module* mod __attribute__((unused)),
+        void** userdata,
+        const char* name __attribute__((unused)),
+        Dwarf_Addr start __attribute__((unused)),
+        void* arg)
+{
+    *userdata = arg;
+    return DWARF_CB_OK;
+}
+
+static bool
+is_deleted_mapping(const char* modname)
+{
+    const char* last_space = strrchr(modname, ' ');
+    return last_space != nullptr && strcmp(last_space, " (deleted)") == 0;
+}
+
+static bool
+should_find_elf_through_proc_pid_root(void** userdata, const char* modname)
+{
+    return userdata != nullptr && *userdata != nullptr && modname != nullptr && modname[0] == '/' &&
+           !is_deleted_mapping(modname);
+}
+
+// Open a mapped path relative to the target process root.
+static int
+find_elf_through_proc_pid_root(void** userdata, const char* modname, char** file_name)
+{
+    if (!should_find_elf_through_proc_pid_root(userdata, modname)) {
+        return -1;
+    }
+
+    const auto pid = *static_cast<const int*>(*userdata);
+    const std::string rooted_path = "/proc/" + std::to_string(pid) + "/root" + modname;
+    struct stat sb;
+    if (stat(rooted_path.c_str(), &sb) == -1 || (sb.st_mode & S_IFMT) != S_IFREG) {
+        return -1;
+    }
+
+    int fd = open(rooted_path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        return -1;
+    }
+    if (file_name == nullptr) {
+        return fd;
+    }
+
+    *file_name = strdup(rooted_path.c_str());
+    if (*file_name == nullptr) {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
 
 int
 pystack_find_elf(
@@ -30,11 +89,17 @@ pystack_find_elf(
         LOG(DEBUG) << "Located debug info for " << the_modname << " using BUILD ID in " << the_filename;
         return ret;
     }
-    ret = dwfl_linux_proc_find_elf(mod, userdata, modname, base, file_name, elfp);
-    if (file_name == nullptr) {
+
+    const bool use_process_root = should_find_elf_through_proc_pid_root(userdata, modname);
+    ret = use_process_root ? find_elf_through_proc_pid_root(userdata, modname, file_name) : -1;
+    if (ret < 0 && !use_process_root) {
+        ret = dwfl_linux_proc_find_elf(mod, userdata, modname, base, file_name, elfp);
+    }
+    if (ret < 0) {
         LOG(DEBUG) << "Could not locate debug info for " << the_modname;
     } else {
-        LOG(DEBUG) << "Located debug info for " << the_modname << " by path in " << *file_name;
+        const char* the_filename = (file_name == nullptr || *file_name == nullptr) ? "???" : *file_name;
+        LOG(DEBUG) << "Located debug info for " << the_modname << " by path in " << the_filename;
     }
     return ret;
 }
@@ -283,6 +348,11 @@ ProcessAnalyzer::ProcessAnalyzer(pid_t pid)
 
     if (dwfl_linux_proc_report(d_dwfl.get(), pid) || dwfl_report_end(d_dwfl.get(), nullptr, nullptr)) {
         throw ElfAnalyzerError("Failed to analyze DWARF information for the remote process");
+    }
+
+    // The find_elf callback needs the PID to retry module paths through /proc/<pid>/root.
+    if (dwfl_getmodules(d_dwfl.get(), set_module_process_pid_userdata, &d_pid, 0) == -1) {
+        throw ElfAnalyzerError("Failed to associate DWARF modules with the remote process");
     }
 
     if (dwfl_linux_proc_attach(d_dwfl.get(), pid, true) != 0) {
