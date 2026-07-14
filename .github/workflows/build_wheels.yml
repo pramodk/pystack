@@ -3,14 +3,7 @@ name: Wheels
 permissions: {}
 
 on:
-  push:
-  pull_request:
-  release:
-    types:
-      - published
-  schedule:
-    # At 12:00 on every day-of-month
-    - cron: "0 12 */1 * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}

@@ -3,15 +3,7 @@ name: News entry check
 permissions: {}
 
 on:
-  pull_request:
-    paths:
-      - "src/**"
-    types:
-      - "opened"
-      - "reopened"
-      - "synchronize"
-      - "labeled"
-      - "unlabeled"
+  workflow_dispatch:
 
 jobs:
   news_entry_check:
