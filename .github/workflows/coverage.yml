@@ -4,6 +4,9 @@ permissions:
   pull-requests: write
 
 on:
+  push:
+    branches:
+      - pramodk/native-symbols-update
   pull_request:
     types:
       - opened
