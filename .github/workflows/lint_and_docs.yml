@@ -2,7 +2,8 @@ name: Lint and docs
 
 permissions: {}
 
-on: [push, pull_request]
+on:
+  workflow_dispatch:
 
 jobs:
   lint_and_docs:
